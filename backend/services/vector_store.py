@@ -45,17 +45,30 @@ class VectorStoreManager:
             # Create a unique collection for this document
             collection_name = f"doc_{document_id}"
             
-            # Delete existing collection if it exists
+            # Try to delete existing collection if it exists
             try:
-                self.chroma_client.delete_collection(name=collection_name)
-            except ValueError:
-                pass  # Collection doesn't exist
+                existing_collections = [col.name for col in self.chroma_client.list_collections()]
+                if collection_name in existing_collections:
+                    print(f"🗑️ Deleting existing collection: {collection_name}")
+                    self.chroma_client.delete_collection(name=collection_name)
+            except Exception as e:
+                print(f"Note: Could not delete existing collection {collection_name}: {e}")
             
-            # Create new collection
-            collection = self.chroma_client.create_collection(
-                name=collection_name,
-                metadata={"hnsw:space": "cosine"}
-            )
+            # Create new collection with retry logic
+            try:
+                collection = self.chroma_client.create_collection(
+                    name=collection_name,
+                    metadata={"hnsw:space": "cosine"}
+                )
+                print(f"✅ Created new collection: {collection_name}")
+            except Exception as e:
+                print(f"Failed to create collection {collection_name}: {e}")
+                # Try to get existing collection if creation failed
+                try:
+                    collection = self.chroma_client.get_collection(name=collection_name)
+                    print(f"✅ Retrieved existing collection: {collection_name}")
+                except Exception as e2:
+                    raise Exception(f"Could not create or retrieve collection {collection_name}: {e2}")
             
             # Prepare data for ChromaDB
             texts = []
@@ -71,22 +84,35 @@ class VectorStoreManager:
                 ids.append(f"{document_id}_{i}")
             
             # Generate embeddings
+            print(f"🔄 Generating embeddings for {len(texts)} documents...")
             embeddings = self.embeddings.embed_documents(texts)
+            print(f"✅ Generated {len(embeddings)} embeddings")
             
-            # Add to ChromaDB
-            collection.add(
-                embeddings=embeddings,
-                documents=texts,
-                metadatas=metadatas,
-                ids=ids
-            )
+            # Add to ChromaDB with batch processing for large documents
+            batch_size = 100
+            for i in range(0, len(texts), batch_size):
+                batch_texts = texts[i:i + batch_size]
+                batch_metadatas = metadatas[i:i + batch_size]
+                batch_ids = ids[i:i + batch_size]
+                batch_embeddings = embeddings[i:i + batch_size]
+                
+                collection.add(
+                    embeddings=batch_embeddings,
+                    documents=batch_texts,
+                    metadatas=batch_metadatas,
+                    ids=batch_ids
+                )
+                print(f"✅ Added batch {i//batch_size + 1} to collection")
             
             # Store collection reference
             self.document_collections[document_id] = collection
             
-            print(f"✅ Created vector store for document {document_id} with {len(documents)} chunks")
+            # Verify collection was created successfully
+            count = collection.count()
+            print(f"✅ Created vector store for document {document_id} with {count} chunks")
             
         except Exception as e:
+            print(f"❌ Error creating vector store: {str(e)}")
             raise Exception(f"Error creating vector store: {str(e)}")
     
     def get_vector_store(self, document_id: str) -> Optional[chromadb.Collection]:
@@ -108,6 +134,30 @@ class VectorStoreManager:
         except Exception as e:
             print(f"Error getting vector store: {e}")
             return None
+    
+    def get_all_chunks(self, document_id: str) -> List[Document]:
+        """Get all document chunks for a given document ID - FIXED: This method was missing"""
+        collection = self.get_vector_store(document_id)
+        if not collection:
+            return []
+        
+        try:
+            # Get all documents from the collection
+            results = collection.get()
+            
+            documents = []
+            if results['documents']:
+                for i, (doc, metadata) in enumerate(zip(results['documents'], results['metadatas'])):
+                    documents.append(Document(
+                        page_content=doc,
+                        metadata=metadata or {}
+                    ))
+            
+            return documents
+            
+        except Exception as e:
+            print(f"Error getting all chunks: {e}")
+            return []
     
     def search_similar(self, document_id: str, query: str, k: int = 4) -> List[Document]:
         """Search for similar documents using ChromaDB"""

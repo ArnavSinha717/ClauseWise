@@ -11,30 +11,49 @@ from langchain.schema import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 import chromadb
 from chromadb.config import Settings
-from langchain_community.document_loaders import PyPDFLoader # <-- Import added for PDF handling
 
 load_dotenv()
 
 class EnhancedLLMService:
     def __init__(self):
-        # Initialize Gemini with optimized settings
+        # Initialize Gemini with correct model name
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
             raise ValueError("GOOGLE_API_KEY not found in environment variables")
         
-        self.gemini_llm = ChatGoogleGenerativeAI(
-            model="gemini-pro",
-            google_api_key=api_key,
-            temperature=0.3,
-            max_tokens=2048,
-            top_k=40,
-            top_p=0.95
-        )
+        # Try different model names until one works
+        model_names = [
+            "gemini-1.5-flash",
+            "gemini-1.5-pro", 
+            "gemini-pro",
+            "gemini-1.0-pro"
+        ]
         
-        # Rate limiting for free tier
+        self.gemini_llm = None
+        for model_name in model_names:
+            try:
+                print(f"🔄 Trying Gemini model: {model_name}")
+                self.gemini_llm = ChatGoogleGenerativeAI(
+                    model=model_name,
+                    google_api_key=api_key,
+                    temperature=0.3,
+                    max_tokens=2048,
+                    top_k=40,
+                    top_p=0.95
+                )
+                print(f"✅ Successfully initialized Gemini with: {model_name}")
+                break
+            except Exception as e:
+                print(f"❌ Model {model_name} failed: {e}")
+                continue
+        
+        if not self.gemini_llm:
+            raise ValueError("Could not initialize any Gemini model. Check your API key.")
+        
+        # Rate limiting
         self.rate_limit = int(os.getenv("RATE_LIMIT_REQUESTS_PER_MINUTE", "15"))
         self.last_request_time = 0
-        self.min_request_interval = 60 / self.rate_limit  # seconds between requests
+        self.min_request_interval = 60 / self.rate_limit
         
         # Initialize embeddings
         self.embeddings = HuggingFaceEmbeddings(
@@ -42,7 +61,7 @@ class EnhancedLLMService:
             model_kwargs={'device': 'cpu'}
         )
         
-        # Legal knowledge base setup
+        # Legal knowledge base (simplified)
         self.legal_kb_collection = None
         self.chroma_client = None
         self.legal_datasets_path = os.getenv("LEGAL_DATASETS_PATH", "./backend/legal_datasets")
@@ -51,7 +70,7 @@ class EnhancedLLMService:
         if self.enable_legal_kb:
             self._initialize_legal_knowledge_base()
         
-        print("✅ Enhanced LLM Service initialized")
+        print("✅ Enhanced LLM Service initialized successfully")
     
     async def _rate_limit_check(self):
         """Ensure we don't exceed API rate limits"""
@@ -84,129 +103,45 @@ class EnhancedLLMService:
                 metadata={"hnsw:space": "cosine"}
             )
             
+            # Create some sample legal knowledge if empty
             if self.legal_kb_collection.count() == 0:
-                print("📚 New legal knowledge base detected. Loading datasets...")
-                legal_documents = self._load_legal_datasets()
+                print("📚 Creating sample legal knowledge base...")
+                sample_legal_data = [
+                    {
+                        "text": "A contract is a legally binding agreement between two or more parties. For a contract to be valid, it must have offer, acceptance, consideration, and legal capacity.",
+                        "type": "definition",
+                        "topic": "contract_law"
+                    },
+                    {
+                        "text": "The Indian Contract Act, 1872 governs contracts in India. Section 10 states that all agreements are contracts if made by free consent of parties competent to contract.",
+                        "type": "law",
+                        "topic": "indian_contract_act"
+                    },
+                    {
+                        "text": "A breach of contract occurs when one party fails to fulfill obligations. Remedies include damages, specific performance, or contract rescission.",
+                        "type": "legal_concept",
+                        "topic": "breach_of_contract"
+                    }
+                ]
                 
-                if legal_documents:
-                    print(f"📚 Creating legal knowledge base with {len(legal_documents)} documents...")
-                    
-                    texts = [doc.page_content for doc in legal_documents]
-                    metadatas = [doc.metadata for doc in legal_documents]
-                    ids = [f"legal_{i}" for i in range(len(legal_documents))]
-                    
-                    batch_size = 100
-                    for i in range(0, len(texts), batch_size):
-                        batch_texts = texts[i:i + batch_size]
-                        batch_metadatas = metadatas[i:i + batch_size]
-                        batch_ids = ids[i:i + batch_size]
-                        
-                        embeddings = self.embeddings.embed_documents(batch_texts)
-                        
-                        self.legal_kb_collection.add(
-                            embeddings=embeddings,
-                            documents=batch_texts,
-                            metadatas=batch_metadatas,
-                            ids=batch_ids
-                        )
-                        print(f"📊 Processed batch {i//batch_size + 1}/{(len(texts)-1)//batch_size + 1}")
-                    
-                    print("✅ Legal knowledge base created successfully!")
-                else:
-                    print("📂 No legal datasets found. Please add files to backend/legal_datasets/")
+                texts = [item["text"] for item in sample_legal_data]
+                metadatas = [{"source": "sample_data", **{k: v for k, v in item.items() if k != "text"}} for item in sample_legal_data]
+                ids = [f"sample_{i}" for i in range(len(sample_legal_data))]
+                embeddings = self.embeddings.embed_documents(texts)
+                
+                self.legal_kb_collection.add(
+                    embeddings=embeddings,
+                    documents=texts,
+                    metadatas=metadatas,
+                    ids=ids
+                )
+                print(f"✅ Created sample legal knowledge base with {len(sample_legal_data)} documents")
             else:
                 print(f"✅ Loaded existing legal knowledge base with {self.legal_kb_collection.count()} documents")
 
         except Exception as e:
             print(f"❌ Error initializing legal knowledge base: {e}")
             self.legal_kb_collection = None
-    
-    def _load_legal_datasets(self) -> List[Document]:
-        """Load legal datasets from files (CSV, JSON, and PDF)"""
-        legal_documents = []
-        
-        if not os.path.exists(self.legal_datasets_path):
-            print(f"📂 Creating legal datasets directory: {self.legal_datasets_path}")
-            os.makedirs(self.legal_datasets_path, exist_ok=True)
-            return []
-        
-        # --- NEW: Process PDF files ---
-        pdf_files = glob.glob(os.path.join(self.legal_datasets_path, "*.pdf"))
-        for pdf_file in pdf_files:
-            try:
-                print(f"📄 Processing PDF: {os.path.basename(pdf_file)}")
-                loader = PyPDFLoader(pdf_file)
-                pages = loader.load()
-                for page in pages:
-                    page.metadata["source"] = os.path.basename(pdf_file)
-                legal_documents.extend(pages)
-                print(f"✅ Loaded {len(pages)} pages from {os.path.basename(pdf_file)}")
-            except Exception as e:
-                print(f"❌ Error processing {pdf_file}: {e}")
-
-        # Process CSV files
-        csv_files = glob.glob(os.path.join(self.legal_datasets_path, "*.csv"))
-        for csv_file in csv_files:
-            try:
-                print(f"📄 Processing CSV: {os.path.basename(csv_file)}")
-                df = pd.read_csv(csv_file, nrows=2000)
-                
-                text_columns = ['text', 'content', 'judgment', 'case_text', 'full_text', 'description', 'summary']
-                
-                for idx, row in df.iterrows():
-                    text_content = None
-                    for col in text_columns:
-                        if col in df.columns and pd.notna(row.get(col)):
-                            text_content = str(row[col])
-                            break
-                    
-                    if text_content and len(text_content) > 100:
-                        metadata = { "source": os.path.basename(csv_file), "type": "csv", "row_id": idx }
-                        for col in df.columns:
-                            if col not in text_columns and pd.notna(row.get(col)):
-                                metadata[col] = str(row[col])[:200]
-                        
-                        legal_documents.append(Document(
-                            page_content=text_content[:2000],
-                            metadata=metadata
-                        ))
-                
-                print(f"✅ Loaded documents from {os.path.basename(csv_file)}")
-                
-            except Exception as e:
-                print(f"❌ Error processing {csv_file}: {e}")
-        
-        # Process JSON files
-        json_files = glob.glob(os.path.join(self.legal_datasets_path, "*.json"))
-        for json_file in json_files:
-            try:
-                print(f"📄 Processing JSON: {os.path.basename(json_file)}")
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                
-                if isinstance(data, list):
-                    for i, item in enumerate(data[:1000]):
-                        if isinstance(item, dict):
-                            text_content = (item.get('text') or item.get('content') or 
-                                          item.get('description') or item.get('judgment'))
-                            
-                            if text_content and len(str(text_content)) > 100:
-                                metadata = { "source": os.path.basename(json_file), "type": "json", "item_id": i }
-                                for key, value in item.items():
-                                    if key not in ['text', 'content']:
-                                        metadata[key] = str(value)[:200]
-                                
-                                legal_documents.append(Document(
-                                    page_content=str(text_content)[:2000],
-                                    metadata=metadata
-                                ))
-                
-                print(f"✅ Loaded documents from {os.path.basename(json_file)}")
-                
-            except Exception as e:
-                print(f"❌ Error processing {json_file}: {e}")
-        
-        return legal_documents
     
     async def simplify_document(self, documents: List[Document]) -> str:
         """Simplify legal document using Gemini"""
@@ -215,12 +150,15 @@ class EnhancedLLMService:
             
             combined_text = ""
             for doc in documents:
-                if len(combined_text) + len(doc.page_content) > 4000: break
+                if len(combined_text) + len(doc.page_content) > 4000: 
+                    break
                 combined_text += doc.page_content + "\n\n"
             
-            prompt = f"""You are a legal expert helping ordinary people understand legal documents in India. 
+            prompt = f"""You are a legal expert helping ordinary people understand legal documents. 
+
 DOCUMENT TO SIMPLIFY:
 {combined_text}
+
 Please provide a clear, simple explanation that includes:
 1. **MAIN PURPOSE**: What is this document for? (in 2-3 sentences)
 2. **KEY POINTS**: What are the most important things to know? (3-5 bullet points)
@@ -228,6 +166,7 @@ Please provide a clear, simple explanation that includes:
 4. **YOUR OBLIGATIONS**: What must you do or pay?
 5. **IMPORTANT DATES**: Any deadlines or time limits mentioned?
 6. **WHAT TO WATCH OUT FOR**: Any concerning clauses or conditions?
+
 Use simple English that a person with basic education can understand. Explain legal terms in plain language."""
             
             result = await asyncio.to_thread(self.gemini_llm.invoke, prompt)
@@ -243,26 +182,34 @@ Use simple English that a person with basic education can understand. Explain le
             
             combined_text = ""
             for doc in documents:
-                if len(combined_text) + len(doc.page_content) > 3500: break
+                if len(combined_text) + len(doc.page_content) > 3500: 
+                    break
                 combined_text += doc.page_content + "\n\n"
             
             prompt = f"""As a legal risk analyst, evaluate the following document for potential risks:
+
 DOCUMENT:
 {combined_text}
+
 Provide a comprehensive risk assessment:
 **🔴 HIGH RISK AREAS:**
 - List any high-risk clauses or terms
 - Financial liabilities or penalties
+
 **🟡 MEDIUM RISK AREAS:**
 - Potentially problematic terms
 - Unclear obligations
+
 **🟢 OVERALL RISK LEVEL:** [Low/Medium/High]
+
 **⚠️ IMMEDIATE ACTION REQUIRED:**
 - Any urgent deadlines
 - Critical decisions needed
+
 **💡 RECOMMENDATIONS:**
 - Suggestions to reduce risks
 - When to consult a lawyer
+
 Be specific and practical in your assessment."""
             
             result = await asyncio.to_thread(self.gemini_llm.invoke, prompt)
@@ -276,12 +223,28 @@ Be specific and practical in your assessment."""
         try:
             await self._rate_limit_check()
             
-            language_names = { "hi": "Hindi (हिंदी)", "bn": "Bengali (বাংলা)", "te": "Telugu (తెలుగు)", "mr": "Marathi (मराठी)", "ta": "Tamil (தமிழ்)", "gu": "Gujarati (ગુજરાતી)", "kn": "Kannada (ಕನ್ನಡ)", "ml": "Malayalam (മലയാളം)", "or": "Odia (ଓଡ଼ିଆ)", "pa": "Punjabi (ਪੰਜਾਬੀ)", "ur": "Urdu (اردو)", "as": "Assamese (অসমীয়া)" }
+            language_names = {
+                "hi": "Hindi (हिंदी)", 
+                "bn": "Bengali (বাংলা)", 
+                "te": "Telugu (తెలుగు)", 
+                "mr": "Marathi (मराठी)", 
+                "ta": "Tamil (தமிழ்)", 
+                "gu": "Gujarati (ગુજરાતી)", 
+                "kn": "Kannada (ಕನ್ನಡ)", 
+                "ml": "Malayalam (മലയാളം)", 
+                "or": "Odia (ଓଡ଼ିଆ)", 
+                "pa": "Punjabi (ਪੰਜਾਬੀ)", 
+                "ur": "Urdu (اردو)", 
+                "as": "Assamese (অসমীয়া)"
+            }
+            
             target_lang_name = language_names.get(target_language, "Hindi")
             text_to_translate = text[:3000]
             
             prompt = f"""Translate the following legal document explanation to {target_lang_name}. Maintain the structure and formatting.
+
 {text_to_translate}
+
 Translation in {target_lang_name}:"""
             
             result = await asyncio.to_thread(self.gemini_llm.invoke, prompt)
@@ -298,10 +261,13 @@ Translation in {target_lang_name}:"""
             
             doc_context = ""
             if hasattr(document_vector_store, 'query'):
-                query_embedding = self.embeddings.embed_query(question)
-                doc_results = document_vector_store.query(query_embeddings=[query_embedding], n_results=3)
-                if doc_results['documents'] and doc_results['documents'][0]:
-                    doc_context = "\n".join([doc[:400] for doc in doc_results['documents'][0]])
+                try:
+                    query_embedding = self.embeddings.embed_query(question)
+                    doc_results = document_vector_store.query(query_embeddings=[query_embedding], n_results=3)
+                    if doc_results['documents'] and doc_results['documents'][0]:
+                        doc_context = "\n".join([doc[:400] for doc in doc_results['documents'][0]])
+                except Exception as e:
+                    print(f"Document query error: {e}")
             
             legal_context = ""
             if self.legal_kb_collection:
@@ -315,17 +281,27 @@ Translation in {target_lang_name}:"""
             
             lang_instruction = ""
             if language != "en":
-                language_names = { "hi": "Hindi", "bn": "Bengali", "te": "Telugu", "mr": "Marathi", "ta": "Tamil", "gu": "Gujarati", "kn": "Kannada", "ml": "Malayalam", "or": "Odia", "pa": "Punjabi", "ur": "Urdu", "as": "Assamese" }
+                language_names = {
+                    "hi": "Hindi", "bn": "Bengali", "te": "Telugu", 
+                    "mr": "Marathi", "ta": "Tamil", "gu": "Gujarati", 
+                    "kn": "Kannada", "ml": "Malayalam", "or": "Odia", 
+                    "pa": "Punjabi", "ur": "Urdu", "as": "Assamese"
+                }
                 lang_name = language_names.get(language, "Hindi")
                 lang_instruction = f"Please answer in {lang_name}."
             
-            prompt = f"""You are a helpful legal assistant for Indian legal documents. Answer the user's question based on the provided context.
+            prompt = f"""You are a helpful legal assistant for legal documents. Answer the user's question based on the provided context.
+
 DOCUMENT CONTEXT:
 {doc_context}
+
 LEGAL KNOWLEDGE CONTEXT:
 {legal_context}
+
 USER QUESTION: {question}
+
 {lang_instruction}
+
 Provide a helpful, accurate answer based on the context. If you cannot find relevant information, say so clearly."""
             
             response = await asyncio.to_thread(self.gemini_llm.invoke, prompt)
