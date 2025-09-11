@@ -1,0 +1,168 @@
+:root {
+  --imessage-blue: #3366FF;
+  --imessage-blue-disabled: #a8bfff;
+  --imessage-gray: #F2F2F7;
+  --text-primary: #1d1d1f;
+  --text-secondary: #6e6e73;
+  --border-color: #d1d1d6;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(255, 59, 48, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 59, 48, 0);
+  }
+}
+
+.imessage-container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.messages-area {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.message-bubble {
+  padding: 12px 18px;
+  border-radius: 22px;
+  max-width: 75%;
+  line-height: 1.5;
+  word-wrap: break-word;
+}
+
+.message-bubble.incoming {
+  background-color: var(--imessage-gray);
+  color: var(--text-primary);
+  align-self: flex-start;
+  border-bottom-left-radius: 6px;
+}
+
+.pdf-preview {
+  background: transparent;
+  border: none;
+  padding: 0;
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.pdf-preview h4 {
+  margin: 0 0 8px 0;
+  font-size: 1.05em;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pdf-preview pre {
+  margin: 0;
+  font-family: inherit;
+  font-size: 0.95rem;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: var(--text-secondary);
+}
+
+.input-area {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding-top: 10px;
+  flex-shrink: 0;
+}
+
+.input-bubble {
+  flex-grow: 1;
+  display: flex;
+  align-items: center;
+  background-color: #f9f9f9;
+  border: 1px solid var(--border-color);
+  border-radius: 24px;
+  padding: 0 4px 0 12px;
+}
+
+.lang-toggle-button {
+  border: 1px solid var(--border-color);
+  background-color: white;
+  color: var(--text-secondary);
+  border-radius: 12px;
+  padding: 4px 8px;
+  font-weight: 500;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.lang-toggle-button:hover {
+  background-color: #f0f0f0;
+}
+
+.input-bubble textarea {
+  flex-grow: 1;
+  border: none;
+  background: transparent;
+  padding: 12px 8px;
+  font-family: inherit;
+  font-size: 1rem;
+  resize: none;
+  outline: none;
+  max-height: 100px;
+  color: var(--text-primary);
+}
+
+.mic-button, .file-upload-button {
+  border: none;
+  background: transparent;
+  padding: 8px;
+  font-size: 1.4rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  border-radius: 50%;
+  opacity: 0.9;
+  transition: opacity 0.2s ease, background-color 0.2s ease;
+}
+
+.mic-button:hover, .file-upload-button:hover {
+  opacity: 1;
+  background-color: #e9e9e9;
+}
+
+.mic-button.active {
+  color: #FF3B30;
+  animation: pulse 2s infinite;
+}
+
+#pdf-upload {
+  display: none;
+}
+
+.submit-button {
+  background-color: var(--imessage-blue);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: none;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.2s ease, background-color 0.2s ease;
+}
+
+.submit-button:hover:not(:disabled) {
+  transform: scale(1.05);
+}
+
+.submit-button:disabled {
+  background-color: var(--imessage-blue-disabled);
+  cursor: not-allowed;
+}
