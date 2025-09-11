@@ -1,0 +1,17 @@
+[
+  {
+    "text": "A contract is a legally binding agreement between two or more parties. For a contract to be valid, it must have offer, acceptance, consideration, and legal capacity of parties.",
+    "type": "definition",
+    "topic": "contract_law"
+  },
+  {
+    "text": "Indian Contract Act, 1872 governs contracts in India. Section 10 states that all agreements are contracts if made by free consent of parties competent to contract, for lawful consideration and with lawful object.",
+    "type": "law",
+    "topic": "indian_contract_act"
+  },
+  {
+    "text": "A breach of contract occurs when one party fails to fulfill their obligations under the contract. Remedies include damages, specific performance, or contract rescission.",
+    "type": "legal_concept",
+    "topic": "breach_of_contract"
+  }
+]

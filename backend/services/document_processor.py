@@ -1,54 +1,57 @@
-import PyPDF2
 import hashlib
 import os
-from typing import List, Dict
+from typing import List, Tuple
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
+from langchain_community.document_loaders import PyPDFLoader
+import tempfile
 
 class DocumentProcessor:
     def __init__(self):
-        self.documents: Dict[str, List[Document]] = {}
+        """Initializes the text splitter."""
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200,
             separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""]
         )
     
-    def process_document(self, file_path: str) -> str:
-        """Process PDF document and return document ID"""
+    def process_uploaded_file(self, file_content: bytes, filename: str) -> Tuple[str, List[Document]]:
+        """
+        Processes an uploaded PDF file's content, returns a document ID and its text chunks.
+        """
         try:
-            # Extract text from PDF
-            text = self._extract_pdf_text(file_path)
+            # Use a temporary file to hold the uploaded content for processing
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+                temp_file.write(file_content)
+                temp_file_path = temp_file.name
+
+            # Use PyPDFLoader to extract text
+            loader = PyPDFLoader(temp_file_path)
+            pages = loader.load()
+            full_text = "\n".join([page.page_content for page in pages])
+
+            if not full_text.strip():
+                return None, []
+
+            # Generate a unique document ID based on the content
+            doc_id = hashlib.md5(full_text.encode()).hexdigest()
             
-            # Generate unique document ID
-            doc_id = hashlib.md5(text.encode()).hexdigest()
+            # Split the text into chunks
+            chunks = self.text_splitter.split_text(full_text)
             
-            # Split text into chunks
-            chunks = self.text_splitter.split_text(text)
-            documents = [Document(page_content=chunk) for chunk in chunks]
+            # Create LangChain Document objects for each chunk
+            documents = []
+            for i, chunk in enumerate(chunks):
+                metadata = {"source": filename, "chunk_id": i, "document_id": doc_id}
+                documents.append(Document(page_content=chunk, metadata=metadata))
             
-            # Store documents
-            self.documents[doc_id] = documents
+            # Clean up the temporary file
+            os.remove(temp_file_path)
             
-            return doc_id
-        
+            return doc_id, documents
+
         except Exception as e:
+            # Ensure temp file is cleaned up on error
+            if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
             raise Exception(f"Error processing document: {str(e)}")
-    
-    def _extract_pdf_text(self, file_path: str) -> str:
-        """Extract text from PDF file"""
-        text = ""
-        with open(file_path, 'rb') as file:
-            pdf_reader = PyPDF2.PdfReader(file)
-            for page in pdf_reader.pages:
-                text += page.extract_text() + "\n"
-        return text
-    
-    def get_chunks(self, document_id: str) -> List[Document]:
-        """Get document chunks by ID"""
-        return self.documents.get(document_id, [])
-    
-    def get_full_text(self, document_id: str) -> str:
-        """Get full document text by ID"""
-        chunks = self.get_chunks(document_id)
-        return "\n".join([chunk.page_content for chunk in chunks])

@@ -1,127 +1,133 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 import os
-from typing import Optional
-import uvicorn
-from services.document_processor import DocumentProcessor
-from services.vector_store import VectorStoreManager
-from services.llm_service import EnhancedLLMService
-from services.translator import TranslatorService
-from models.schemas import SimplificationRequest, ChatRequest, SimplificationResponse, ChatResponse
+import uuid
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from pydantic import BaseModel
+from typing import Dict, Any, List
+from dotenv import load_dotenv
 
-app = FastAPI(title="Legal Document Simplifier API", version="1.0.0")
+from .services.document_processor import DocumentProcessor
+from .services.vector_store import VectorStoreManager
+from .services.llm_service import EnhancedLLMService 
+from .services.translator import Translator
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+load_dotenv()
+
+app = FastAPI(
+    title="ClauseWise - Legal Document Demystifier API",
+    description="An API to simplify, analyze, and chat with legal documents.",
+    version="1.0.0"
 )
 
-# Initialize services
-doc_processor = DocumentProcessor()
-vector_manager = VectorStoreManager()
+document_processor = DocumentProcessor()
+vector_store_manager = VectorStoreManager()
 llm_service = EnhancedLLMService()
-translator = TranslatorService()
+translator = Translator()
 
-# Create temp directory
-os.makedirs("temp", exist_ok=True)
+class DocumentRequest(BaseModel):
+    document_id: str
 
-@app.post("/upload-document")
-async def upload_document(file: UploadFile = File(...)):
-    """Upload and process a legal PDF document"""
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
-    
-    try:
-        # Save uploaded file temporarily
-        temp_path = f"temp/temp_{file.filename}"
-        with open(temp_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
-        
-        # Process document
-        document_id = doc_processor.process_document(temp_path)
-        
-        # Create vector store
-        chunks = doc_processor.get_chunks(document_id)
-        vector_manager.create_vector_store(document_id, chunks)
-        
-        # Clean up temp file
-        os.remove(temp_path)
-        
-        return {
-            "document_id": document_id, 
-            "status": "processed", 
-            "filename": file.filename,
-            "chunks_created": len(chunks)
-        }
-        
-    except Exception as e:
-        # Clean up temp file on error
-        temp_path = f"temp/temp_{file.filename}"
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        raise HTTPException(status_code=500, detail=f"Error processing document: {str(e)}")
+class TranslateRequest(BaseModel):
+    text: str
+    target_language: str = "hi"
 
-@app.post("/simplify", response_model=SimplificationResponse)
-async def simplify_document(request: SimplificationRequest):
-    """Simplify legal document and assess risks using Gemini"""
-    try:
-        chunks = doc_processor.get_chunks(request.document_id)
-        if not chunks:
-            raise HTTPException(status_code=404, detail="Document not found")
-        
-        # Use Gemini for simplification and risk assessment
-        simplified_text = await llm_service.simplify_document(chunks)
-        risk_assessment = await llm_service.assess_risks(chunks)
-        
-        # Translate if target language specified
-        translated_text = None
-        if request.target_language and request.target_language != "en":
-            translated_text = await llm_service.translate_text(
-                simplified_text, 
-                request.target_language
-            )
-        
-        return SimplificationResponse(
-            simplified_text=simplified_text,
-            risk_assessment=risk_assessment,
-            translated_text=translated_text,
-            document_id=request.document_id
-        )
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error simplifying document: {str(e)}")
+class ChatRequest(BaseModel):
+    document_id: str
+    question: str
+    language: str = "en"
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat_with_document(request: ChatRequest):
-    """Chat with the document using RAG and legal knowledge base"""
-    try:
-        vector_store = vector_manager.get_vector_store(request.document_id)
-        if not vector_store:
-            raise HTTPException(status_code=404, detail="Document not found")
-        
-        answer, sources = await llm_service.chat_with_document(
-            vector_store, 
-            request.question, 
-            request.language
-        )
-        
-        return ChatResponse(answer=answer, sources=sources)
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error in chat: {str(e)}")
+@app.get("/", tags=["Status"])
+async def read_root():
+    return {"message": "Welcome to the ClauseWise Legal API!"}
 
-@app.get("/health")
+@app.get("/health", tags=["Status"])
 async def health_check():
-    return {"status": "healthy", "message": "Legal Document Simplifier API is running"}
+    return {"status": "ok"}
 
-@app.get("/supported-languages")
+@app.get("/supported-languages", tags=["Utilities"])
 async def get_supported_languages():
-    """Get list of supported languages for translation"""
     return translator.get_supported_languages()
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+@app.post("/upload-document", tags=["Document"])
+async def upload_document(file: UploadFile = File(...)):
+    if not file.filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed.")
+    
+    try:
+        file_content = await file.read()
+        
+        # --- THIS IS THE FIX ---
+        # Call the single, correct method from the updated DocumentProcessor
+        doc_id, chunks = document_processor.process_uploaded_file(file_content, file.filename)
+
+        if not chunks:
+            raise HTTPException(status_code=400, detail="Could not extract text from the PDF.")
+            
+        vector_store_manager.create_vector_store(doc_id, chunks)
+        
+        return {
+            "message": "Document processed successfully",
+            "document_id": doc_id,
+            "filename": file.filename,
+            "num_chunks": len(chunks)
+        }
+    except Exception as e:
+        print(f"Error in /upload-document: {e}")
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+
+@app.post("/simplify", tags=["Analysis"])
+async def simplify_document(request: DocumentRequest):
+    try:
+        # Use the get_all_chunks method from the new vector_store.py
+        full_text_chunks = vector_store_manager.get_all_chunks(request.document_id)
+        if not full_text_chunks:
+            raise HTTPException(status_code=404, detail="Document not found or has no content.")
+            
+        simplified_text = await llm_service.simplify_document(full_text_chunks)
+        return {"simplified_text": simplified_text}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/assess-risk", tags=["Analysis"])
+async def assess_risk_in_document(request: DocumentRequest):
+    try:
+        full_text_chunks = vector_store_manager.get_all_chunks(request.document_id)
+        if not full_text_chunks:
+            raise HTTPException(status_code=404, detail="Document not found or has no content.")
+            
+        risk_assessment = await llm_service.assess_risks(full_text_chunks)
+        return {"risk_assessment": risk_assessment}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/chat", tags=["Interaction"])
+async def chat_with_document_endpoint(request: ChatRequest):
+    try:
+        vector_store = vector_store_manager.get_vector_store(request.document_id)
+        if not vector_store:
+            raise HTTPException(status_code=404, detail="Document vector store not found.")
+
+        answer, sources = await llm_service.chat_with_document(
+            document_vector_store=vector_store,
+            question=request.question,
+            language=request.language
+        )
+        return {"answer": answer, "sources": sources}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/translate", tags=["Utilities"])
+async def translate_text_endpoint(request: TranslateRequest):
+    try:
+        translated_text = await llm_service.translate_text(request.text, request.target_language)
+        return {"translated_text": translated_text, "language": request.target_language}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/legal-kb-info", tags=["Knowledge Base"])
+async def get_legal_kb_status():
+    info = llm_service.get_legal_kb_info()
+    return info

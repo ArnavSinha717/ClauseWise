@@ -1,282 +1,253 @@
 import streamlit as st
 import requests
-import json
-from typing import Dict, Any
+import os  # <-- This line was missing
+from typing import Dict, Any, List
 
-# Configure the page
+# --- Page Configuration ---
 st.set_page_config(
-    page_title="Legal Document Simplifier",
+    page_title="ClauseWise - Legal AI Assistant",
     page_icon="⚖️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# API base URL
-API_BASE_URL = "http://localhost:8000"
+# --- API Configuration ---
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
-def main():
-    st.title("⚖️ Legal Document Simplifier")
-    st.markdown("Upload a legal PDF document and get simplified explanations in your preferred Indian language!")
-    
-    # Initialize session state
-    if "document_id" not in st.session_state:
-        st.session_state.document_id = None
-    if "simplified_text" not in st.session_state:
-        st.session_state.simplified_text = None
-    if "risk_assessment" not in st.session_state:
-        st.session_state.risk_assessment = None
-    if "translated_text" not in st.session_state:
-        st.session_state.translated_text = None
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
+# --- Session State Initialization ---
+# This ensures that variables persist across user interactions
+def initialize_session_state():
+    defaults = {
+        "document_id": None,
+        "document_name": "",
+        "simplified_text": None,
+        "risk_assessment": None,
+        "translated_text": None,
+        "chat_history": [],
+        "sources": []
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
-    # Sidebar for language selection
-    st.sidebar.title("Settings")
-    
-    # Check API connection
+# --- API Communication Functions ---
+# These functions handle all requests to the backend API
+
+def check_backend_health() -> bool:
     try:
         response = requests.get(f"{API_BASE_URL}/health", timeout=5)
-        if response.status_code == 200:
-            st.sidebar.success("✅ Backend Connected")
-        else:
-            st.sidebar.error("❌ Backend Error")
-    except:
-        st.sidebar.error("❌ Backend Offline")
-        st.error("Please make sure the backend is running on http://localhost:8000")
-        return
-    
-    # Get supported languages
+        return response.status_code == 200
+    except requests.ConnectionError:
+        return False
+
+def get_supported_languages() -> Dict[str, str]:
     try:
-        lang_response = requests.get(f"{API_BASE_URL}/supported-languages")
-        if lang_response.status_code == 200:
-            language_options = lang_response.json()
-        else:
-            language_options = {"hi": "Hindi", "en": "English"}
+        response = requests.get(f"{API_BASE_URL}/supported-languages", timeout=5)
+        if response.status_code == 200:
+            return response.json()
     except:
-        language_options = {"hi": "Hindi", "en": "English"}
-    
-    # Add display names for better UX
-    display_options = {}
-    for code, name in language_options.items():
-        if code == "hi":
-            display_options[code] = f"{name} (हिंदी)"
-        elif code == "bn":
-            display_options[code] = f"{name} (বাংলা)"
-        elif code == "te":
-            display_options[code] = f"{name} (తెలుగు)"
-        elif code == "mr":
-            display_options[code] = f"{name} (मराठी)"
-        elif code == "ta":
-            display_options[code] = f"{name} (தமிழ்)"
-        elif code == "gu":
-            display_options[code] = f"{name} (ગુજરાતી)"
-        elif code == "kn":
-            display_options[code] = f"{name} (ಕನ್ನಡ)"
-        elif code == "ml":
-            display_options[code] = f"{name} (മലയാളം)"
-        else:
-            display_options[code] = name
-    
-    selected_language = st.sidebar.selectbox(
-        "Select Translation Language:",
-        options=list(display_options.keys()),
-        format_func=lambda x: display_options[x],
-        index=0
-    )
+        return {"en": "English", "hi": "Hindi"}
+    return {"en": "English", "hi": "Hindi"}
 
-    # Free tier warning
-    st.sidebar.info("💡 Using Gemini Free Tier\n\nPlease wait between requests to avoid rate limits.")
+def upload_document(file) -> tuple[bool, Dict[str, Any]]:
+    try:
+        files = {"file": (file.name, file.getvalue(), "application/pdf")}
+        response = requests.post(f"{API_BASE_URL}/upload-document", files=files, timeout=60)
+        response.raise_for_status()
+        return True, response.json()
+    except requests.RequestException as e:
+        error_detail = e.response.json().get("detail", str(e)) if e.response else str(e)
+        return False, {"error": error_detail}
 
-    # Main content area
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        st.header("📄 Document Upload & Processing")
+def simplify_document(doc_id: str) -> tuple[bool, Dict[str, Any]]:
+    try:
+        response = requests.post(f"{API_BASE_URL}/simplify", json={"document_id": doc_id}, timeout=90)
+        response.raise_for_status()
+        return True, response.json()
+    except requests.RequestException as e:
+        error_detail = e.response.json().get("detail", str(e)) if e.response else str(e)
+        return False, {"error": error_detail}
+
+def assess_risk(doc_id: str) -> tuple[bool, Dict[str, Any]]:
+    try:
+        response = requests.post(f"{API_BASE_URL}/assess-risk", json={"document_id": doc_id}, timeout=90)
+        response.raise_for_status()
+        return True, response.json()
+    except requests.RequestException as e:
+        error_detail = e.response.json().get("detail", str(e)) if e.response else str(e)
+        return False, {"error": error_detail}
+
+def chat_with_document(doc_id: str, question: str, lang: str) -> tuple[bool, Dict[str, Any]]:
+    try:
+        payload = {"document_id": doc_id, "question": question, "language": lang}
+        response = requests.post(f"{API_BASE_URL}/chat", json=payload, timeout=90)
+        response.raise_for_status()
+        return True, response.json()
+    except requests.RequestException as e:
+        error_detail = e.response.json().get("detail", str(e)) if e.response else str(e)
+        return False, {"error": error_detail}
+
+def translate_text(text: str, lang: str) -> tuple[bool, Dict[str, Any]]:
+    try:
+        payload = {"text": text, "target_language": lang}
+        response = requests.post(f"{API_BASE_URL}/translate", json=payload, timeout=90)
+        response.raise_for_status()
+        return True, response.json()
+    except requests.RequestException as e:
+        error_detail = e.response.json().get("detail", str(e)) if e.response else str(e)
+        return False, {"error": error_detail}
+
+# --- UI Rendering Functions ---
+
+def render_sidebar(language_options: Dict[str, str]):
+    with st.sidebar:
+        st.title("⚖️ ClauseWise")
         
-        # File upload
-        uploaded_file = st.file_uploader(
-            "Upload a PDF legal document",
-            type=["pdf"],
-            help="Upload a legal contract, agreement, or other legal document (max 10MB)"
+        if check_backend_health():
+            st.success("✅ Backend Connected")
+        else:
+            st.error("❌ Backend Offline")
+            st.warning("Please start the backend server to use the app.")
+            st.stop()
+
+        st.header("Settings")
+        selected_language = st.selectbox(
+            "Select Language:",
+            options=list(language_options.keys()),
+            format_func=lambda x: language_options.get(x, x),
+            index=0
         )
         
-        if uploaded_file is not None:
-            st.info(f"File: {uploaded_file.name} ({uploaded_file.size} bytes)")
-            
+        st.info("💡 Using Gemini Free Tier. Please wait between requests to avoid rate limits.")
+        st.markdown("---")
+        st.subheader("📚 Legal Knowledge Base")
+        st.markdown("""
+        To enhance legal knowledge:
+        1. Add PDF/CSV/JSON files to `backend/legal_datasets/`
+        2. Restart the backend server.
+        """)
+    return selected_language
+
+def render_main_content(selected_language: str, lang_name: str):
+    st.title("Legal AI Assistant")
+    st.markdown("Upload a legal document to simplify, assess risks, and ask questions.")
+
+    # --- Document Upload Section ---
+    with st.container(border=True):
+        st.header("📄 1. Upload & Process Document")
+        uploaded_file = st.file_uploader(
+            "Upload a PDF legal document", type=["pdf"],
+            help="Max file size 10MB"
+        )
+        
+        if uploaded_file:
             if st.button("Process Document", type="primary"):
                 with st.spinner("Processing document... This may take a moment."):
                     success, result = upload_document(uploaded_file)
+                    if success:
+                        # Reset state for new document
+                        initialize_session_state() 
+                        st.session_state.document_id = result["document_id"]
+                        st.session_state.document_name = result["filename"]
+                        st.success(f"✅ Document '{result['filename']}' processed successfully!")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Error: {result.get('error', 'Unknown processing error')}")
+
+    if not st.session_state.document_id:
+        st.info("Please upload and process a document to begin analysis.")
+        st.stop()
+
+    st.success(f"**Active Document:** `{st.session_state.document_name}`")
+
+    # --- Analysis & Chat Columns ---
+    col1, col2 = st.columns(2)
+
+    # --- Analysis Column ---
+    with col1:
+        with st.container(border=True):
+            st.header("🔍 2. Analyze Document")
+            
+            if st.button("Simplify Document"):
+                with st.spinner("Generating simplified summary..."):
+                    success, result = simplify_document(st.session_state.document_id)
+                    if success:
+                        st.session_state.simplified_text = result["simplified_text"]
+                    else:
+                        st.error(f"❌ Simplification Error: {result.get('error')}")
+
+            if st.button("Assess Risks"):
+                with st.spinner("Performing risk assessment..."):
+                    success, result = assess_risk(st.session_state.document_id)
+                    if success:
+                        st.session_state.risk_assessment = result["risk_assessment"]
+                    else:
+                        st.error(f"❌ Risk Assessment Error: {result.get('error')}")
+            
+            if st.session_state.simplified_text and selected_language != "en":
+                if st.button(f"Translate Summary to {lang_name}"):
+                    with st.spinner(f"Translating..."):
+                        success, result = translate_text(st.session_state.simplified_text, selected_language)
+                        if success:
+                            st.session_state.translated_text = result["translated_text"]
+                        else:
+                            st.error(f"❌ Translation Error: {result.get('error')}")
+
+        # --- Results Display ---
+        if st.session_state.simplified_text or st.session_state.risk_assessment:
+            with st.container(border=True):
+                st.header("📋 Analysis Results")
+                if st.session_state.simplified_text:
+                    with st.expander("📖 Simplified Summary", expanded=True):
+                        st.markdown(st.session_state.simplified_text)
+                
+                if st.session_state.risk_assessment:
+                    with st.expander("⚠️ Risk Assessment", expanded=True):
+                        st.markdown(st.session_state.risk_assessment)
+
+                if st.session_state.translated_text:
+                    with st.expander(f"🌐 Translation ({lang_name})", expanded=True):
+                        st.markdown(st.session_state.translated_text)
+
+    # --- Chat Column ---
+    with col2:
+        with st.container(border=True):
+            st.header("💬 3. Chat with Document")
+            
+            # Display chat history
+            for message in st.session_state.chat_history:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
+
+            # Chat input
+            if prompt := st.chat_input("Ask a question about the document..."):
+                st.session_state.chat_history.append({"role": "user", "content": prompt})
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+
+                with st.spinner("Thinking..."):
+                    success, result = chat_with_document(st.session_state.document_id, prompt, selected_language)
                     
                     if success:
-                        st.session_state.document_id = result["document_id"]
-                        st.success(f"✅ Document processed successfully!")
-                        st.info(f"📄 Created {result.get('chunks_created', 0)} text chunks")
-                        st.info(f"🆔 Document ID: {result['document_id'][:8]}...")
-                    else:
-                        st.error(f"❌ Error processing document: {result}")
-        
-        # Simplification section
-        if st.session_state.document_id:
-            st.subheader("🔍 Document Analysis")
-            
-            col_simplify, col_translate = st.columns(2)
-            
-            with col_simplify:
-                if st.button("📋 Simplify Document", type="secondary"):
-                    with st.spinner("Analyzing document... (Using Gemini AI)"):
-                        success, result = simplify_document(st.session_state.document_id, "en")
+                        response_text = result["answer"]
+                        sources = result.get("sources", [])
+                        if sources:
+                            response_text += f"\n\n*Sources: {', '.join(sources)}*"
                         
-                        if success:
-                            st.session_state.simplified_text = result["simplified_text"]
-                            st.session_state.risk_assessment = result["risk_assessment"]
-                            st.success("✅ Document simplified!")
-                        else:
-                            st.error(f"❌ Error: {result}")
-            
-            with col_translate:
-                if st.button("🌐 Get Translation", type="secondary"):
-                    if st.session_state.simplified_text:
-                        with st.spinner(f"Translating to {display_options[selected_language]}..."):
-                            success, result = simplify_document(st.session_state.document_id, selected_language)
-                            
-                            if success:
-                                st.session_state.translated_text = result.get("translated_text")
-                                st.success("✅ Translation complete!")
-                            else:
-                                st.error(f"❌ Translation error: {result}")
+                        st.session_state.chat_history.append({"role": "assistant", "content": response_text})
+                        st.rerun()
                     else:
-                        st.warning("Please simplify the document first")
+                        error_message = f"❌ Error: {result.get('error', 'Could not get an answer.')}"
+                        st.session_state.chat_history.append({"role": "assistant", "content": error_message})
+                        st.rerun()
 
-    with col2:
-        st.header("📋 Results")
-        
-        # Display simplified text
-        if st.session_state.simplified_text:
-            with st.expander("📖 Simplified Summary", expanded=True):
-                st.write(st.session_state.simplified_text)
-            
-            # Display translated text if available
-            if st.session_state.translated_text:
-                with st.expander(f"🌐 Translation ({display_options[selected_language]})", expanded=True):
-                    st.write(st.session_state.translated_text)
-            
-            # Display risk assessment
-            if st.session_state.risk_assessment:
-                with st.expander("⚠️ Risk Assessment", expanded=False):
-                    st.write(st.session_state.risk_assessment)
-        else:
-            st.info("Upload and process a document to see results here")
-
-    # Chat section (full width)
-    if st.session_state.document_id:
-        st.header("💬 Chat with Your Document")
-        st.caption("Ask questions about your document or get legal guidance")
-        
-        # Display chat history
-        if st.session_state.chat_history:
-            with st.container():
-                for i, (question, answer) in enumerate(st.session_state.chat_history):
-                    with st.chat_message("user"):
-                        st.write(f"**Q:** {question}")
-                    with st.chat_message("assistant"):
-                        st.write(f"**A:** {answer}")
-        
-        # Chat input
-        question = st.text_input(
-            "Ask a question about your document:",
-            placeholder="e.g., What are my main obligations in this contract?",
-            key="chat_input"
-        )
-        
-        col_ask, col_clear = st.columns([3, 1])
-        
-        with col_ask:
-            if st.button("Ask Question", type="primary"):
-                if question.strip():
-                    with st.spinner("Getting answer... (This may take a few seconds)"):
-                        success, result = chat_with_document(
-                            st.session_state.document_id, 
-                            question.strip(), 
-                            selected_language if selected_language != "en" else "en"
-                        )
-                        
-                        if success:
-                            st.session_state.chat_history.append((question.strip(), result["answer"]))
-                            st.rerun()
-                        else:
-                            st.error(f"❌ Error: {result}")
-                else:
-                    st.warning("Please enter a question")
-        
-        with col_clear:
-            if st.button("Clear Chat"):
-                st.session_state.chat_history = []
-                st.rerun()
-    
-    # Instructions for adding legal datasets
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📚 Legal Knowledge Base")
-    st.sidebar.markdown("""
-    **To enhance legal knowledge:**
-    
-    1. Create folder: `backend/legal_datasets/`
-    2. Add CSV/JSON files with legal data
-    3. Restart the backend
-    
-    **Supported formats:**
-    - CSV with 'text', 'content', or 'judgment' columns
-    - JSON with text content
-    
-    **Datasets you mentioned:**
-    - Laws and Acts of India
-    - SC Judgments 1950-2024
-    - Legal Documents dataset
-    """)
-
-def upload_document(file) -> tuple[bool, Dict[str, Any]]:
-    """Upload document to the API"""
-    try:
-        files = {"file": (file.name, file.getvalue(), "application/pdf")}
-        response = requests.post(f"{API_BASE_URL}/upload-document", files=files, timeout=30)
-        
-        if response.status_code == 200:
-            return True, response.json()
-        else:
-            return False, response.json().get("detail", "Unknown error")
-    except Exception as e:
-        return False, str(e)
-
-def simplify_document(document_id: str, target_language: str) -> tuple[bool, Dict[str, Any]]:
-    """Simplify document using the API"""
-    try:
-        payload = {
-            "document_id": document_id,
-            "target_language": target_language
-        }
-        response = requests.post(f"{API_BASE_URL}/simplify", json=payload, timeout=60)
-        
-        if response.status_code == 200:
-            return True, response.json()
-        else:
-            return False, response.json().get("detail", "Unknown error")
-    except Exception as e:
-        return False, str(e)
-
-def chat_with_document(document_id: str, question: str, language: str = "en") -> tuple[bool, Dict[str, Any]]:
-    """Chat with document using the API"""
-    try:
-        payload = {
-            "document_id": document_id,
-            "question": question,
-            "language": language
-        }
-        response = requests.post(f"{API_BASE_URL}/chat", json=payload, timeout=45)
-        
-        if response.status_code == 200:
-            return True, response.json()
-        else:
-            return False, response.json().get("detail", "Unknown error")
-    except Exception as e:
-        return False, str(e)
+# --- Main Application ---
+def main():
+    initialize_session_state()
+    language_options = get_supported_languages()
+    selected_lang_code = render_sidebar(language_options)
+    selected_lang_name = language_options.get(selected_lang_code, "Unknown")
+    render_main_content(selected_lang_code, selected_lang_name)
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,33 @@
+# Core Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+streamlit==1.28.1
+
+# Document Processing
+PyPDF2==3.0.1
+python-multipart==0.0.6
+
+# LLM and Embeddings
+langchain==0.1.0
+langchain-google-genai==1.0.1
+langchain-community==0.0.10
+langchain-huggingface==0.0.1
+google-generativeai==0.3.2
+
+# Vector Database
+chromadb==0.4.18
+sentence-transformers==2.2.2
+
+# Data Processing
+pandas==2.1.4
+numpy==1.24.3
+
+# Environment and Config
+python-dotenv==1.0.0
+
+# HTTP Requests
+requests==2.31.0
+
+# Additional utilities
+aiofiles==23.2.1
+python-jose[cryptography]==3.3.0
