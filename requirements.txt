@@ -1,33 +1,49 @@
-# Core Framework
+# ClauseWise - Legal Document AI Assistant
+# Compatible with Python 3.8, 3.9, 3.10, 3.11, 3.12
+# Tested on Python 3.10+ (recommended)
+
+# Core Web Framework
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
+
+# Frontend Framework  
 streamlit==1.28.1
 
-# Document Processing
-PyPDF2==3.0.1
-python-multipart==0.0.6
+# Document Processing (Core - Required)
+pypdf==4.0.0                    # Required by LangChain PyPDFLoader
+PyPDF2==3.0.1                   # Fallback PDF reader
+python-multipart==0.0.6         # File upload support
 
-# LLM and Embeddings
-langchain==0.1.0
-langchain-google-genai==1.0.1
-langchain-community==0.0.10
-langchain-huggingface==0.0.1
-google-generativeai==0.3.2
+# Document Processing (Enhanced - Optional but Recommended)
+PyMuPDF==1.23.26                # Better PDF text extraction
 
-# Vector Database
-chromadb==0.4.18
-sentence-transformers==2.2.2
+# LLM and AI Integration
+langchain==0.1.20               # Core LangChain framework
+langchain-google-genai==1.0.10  # Google Gemini integration
+langchain-community==0.0.38     # Community loaders (PyPDFLoader)
+langchain-huggingface==0.0.3    # HuggingFace embeddings integration
+google-generativeai==0.4.0      # Direct Google AI API
+
+# Vector Database and Embeddings
+chromadb==0.4.24                # Local vector database
+sentence-transformers==2.2.2    # Text embeddings model
 
 # Data Processing
-pandas==2.1.4
-numpy==1.24.3
+pandas==2.1.4                   # Data manipulation
+numpy==1.24.3                   # Numerical computing
 
-# Environment and Config
-python-dotenv==1.0.0
+# Configuration and Environment
+python-dotenv==1.0.0            # Environment variable management
 
-# HTTP Requests
-requests==2.31.0
+# HTTP and Networking
+requests==2.31.0                # HTTP client
+aiofiles==23.2.1                # Async file operations
 
-# Additional utilities
-aiofiles==23.2.1
-python-jose[cryptography]==3.3.0
+# Security and Authentication (Optional)
+python-jose[cryptography]==3.3.0  # JWT tokens (if needed)
+
+# Development and Testing (Optional - uncomment if needed)
+# pytest==7.4.3                 # Testing framework
+# pytest-asyncio==0.21.1        # Async testing support
+# black==23.11.0                # Code formatting
+# flake8==6.1.0                 # Code linting
