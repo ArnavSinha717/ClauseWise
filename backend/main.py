@@ -1,28 +1,132 @@
-# Add these Pydantic models for language-aware voice operations
-class DocumentUploadRequest(BaseModel):
-    language: Optional[str] = "en"  # Document language
+from fastapi import FastAPI, HTTPException, File, UploadFile, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from typing import Optional, List, Dict, Any
+import logging
+import os
+from dotenv import load_dotenv
 
-class VoiceTranscriptionRequest(BaseModel):
-    audio_format: str = "webm"
-    language: str = "en"  # Language for transcription
+# Load environment variables
+load_dotenv()
 
-class TTSRequest(BaseModel):
-    text: str
-    voice_id: Optional[str] = None
-    voice_settings: Optional[Dict[str, Any]] = None
-    language: str = "en"  # Language for TTS
+# Import your services
+from backend.services.llm_service import EnhancedLLMService
+from backend.services.document_processor import DocumentProcessor  
+from backend.services.vector_store import VectorStoreManager
+from backend.services.voice_service import VoiceService
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="ClauseWise API",
+    description="Legal Document AI Assistant with Voice Support",
+    version="1.0.0"
+)
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000", 
+        "http://localhost:8501", 
+        "http://127.0.0.1:3000", 
+        "http://127.0.0.1:8501",
+        "http://localhost:5173",  # Vite dev server
+        "http://127.0.0.1:5173"   # Vite dev server
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
+
+# Initialize services
+try:
+    logger.info("Initializing services...")
+    
+    # Initialize LLM service
+    llm_service = EnhancedLLMService()
+    logger.info("✅ LLM Service initialized")
+    
+    # Initialize document processor
+    document_processor = DocumentProcessor()
+    logger.info("✅ Document Processor initialized")
+    
+    # Initialize vector store manager
+    vector_store_manager = VectorStoreManager()
+    logger.info("✅ Vector Store Manager initialized")
+    
+    # Initialize voice service
+    voice_service = VoiceService()
+    logger.info("✅ Voice Service initialized")
+    
+    logger.info("🚀 All services initialized successfully!")
+    
+except Exception as e:
+    logger.error(f"❌ Failed to initialize services: {e}")
+    raise
+
+# Pydantic models
+class SimplificationRequest(BaseModel):
+    document_id: str
+
+class RiskAssessmentRequest(BaseModel):
+    document_id: str
 
 class ChatRequest(BaseModel):
     document_id: str
     question: str
     language: str = "en"
-    use_document_language: bool = True  # Use document's original language
+    use_document_language: bool = True
 
-# Update the upload endpoint to store document language
+class TranslationRequest(BaseModel):
+    text: str
+    target_language: str = "hi"
+
+class VoiceTranscriptionRequest(BaseModel):
+    audio_format: str = "webm"
+    language: str = "en"
+
+class TTSRequest(BaseModel):
+    text: str
+    voice_id: Optional[str] = None
+    voice_settings: Optional[Dict[str, Any]] = None
+    language: str = "en"
+
+# Health check endpoint
+@app.get("/health", tags=["System"])
+async def health_check():
+    """Health check endpoint"""
+    try:
+        legal_kb_info = llm_service.get_legal_kb_info()
+        return {
+            "status": "healthy",
+            "message": "ClauseWise API is running",
+            "services": {
+                "document_processor": "healthy",
+                "vector_store": "healthy", 
+                "llm_service": "healthy",
+                "legal_kb": legal_kb_info.get("status", "unknown"),
+                "voice_service": "healthy" if voice_service.is_tts_available() else "limited"
+            },
+            "legal_kb_documents": legal_kb_info.get("count", 0),
+            "voice_available": {
+                "tts": voice_service.is_tts_available(),
+                "stt": voice_service.is_stt_available()
+            }
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Health check failed: {str(e)}")
+
+# Document upload endpoint
 @app.post("/upload-document", tags=["Document"])
 async def upload_document(
     file: UploadFile = File(...),
-    language: str = "en"  # Add language parameter
+    language: str = "en"
 ):
     """Upload and process a PDF document with language preference"""
     # Validate file type
@@ -53,14 +157,13 @@ async def upload_document(
         # Store document language preference in metadata
         doc_info = document_processor.get_document_info(chunks)
         doc_info["language"] = language
-        doc_info["supports_voice"] = voice_service.is_language_supported(language)
         
         # Store language in vector store metadata if possible
         try:
             collection = vector_store_manager.get_vector_store(doc_id)
             if collection:
                 # Update collection metadata with language info
-                collection.modify(metadata={"language": language, "voice_supported": doc_info["supports_voice"]})
+                collection.modify(metadata={"language": language})
         except Exception as e:
             logger.warning(f"Could not store language metadata: {e}")
         
@@ -84,18 +187,224 @@ async def upload_document(
         logger.error(f"Error processing {file.filename}: {e}")
         raise HTTPException(status_code=500, detail=f"Document processing failed: {str(e)}")
 
-# Update voice transcription endpoint
+# Explicit OPTIONS handler for upload endpoint
+@app.options("/upload-document")
+async def upload_document_options():
+    """Handle OPTIONS request for upload endpoint"""
+    return JSONResponse(
+        content={"message": "OK"},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+# Get documents endpoint
+@app.get("/documents", tags=["Document"])
+async def get_documents():
+    """Get list of uploaded documents"""
+    try:
+        document_ids = vector_store_manager.list_documents()
+        documents = []
+        
+        for doc_id in document_ids:
+            collection_info = vector_store_manager.get_collection_info(doc_id)
+            if collection_info:
+                documents.append({
+                    "document_id": doc_id,
+                    "filename": f"Document_{doc_id[:8]}",  # Placeholder filename
+                    "upload_date": None,  # Could be added to metadata
+                    "chunks": collection_info.get("count", 0)
+                })
+        
+        return {
+            "documents": documents,
+            "count": len(documents)
+        }
+    except Exception as e:
+        logger.error(f"Error getting documents: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get documents: {str(e)}")
+
+# Delete document endpoint
+@app.delete("/documents/{document_id}", tags=["Document"])
+async def delete_document(document_id: str):
+    """Delete a document and its vector store"""
+    try:
+        success = vector_store_manager.delete_document(document_id)
+        if success:
+            return {"message": f"Document {document_id} deleted successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="Document not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting document {document_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
+
+# Get document language info
+@app.get("/documents/{document_id}/language", tags=["Document"])
+async def get_document_language(document_id: str):
+    """Get language information for a specific document"""
+    try:
+        collection_info = vector_store_manager.get_collection_info(document_id)
+        if not collection_info:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        language = collection_info.get("metadata", {}).get("language", "en")
+        
+        return {
+            "document_id": document_id,
+            "language": language,
+            "language_name": voice_service.get_supported_languages().get(language, {}).get("name", "Unknown"),
+            "voice_support": {
+                "stt_supported": voice_service.is_language_supported(language, "stt"),
+                "tts_supported": voice_service.is_language_supported(language, "tts")
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting document language: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Simplify document endpoint
+@app.post("/simplify", tags=["Analysis"])
+async def simplify_document_endpoint(request: SimplificationRequest):
+    """Simplify a legal document into plain language"""
+    try:
+        logger.info(f"Simplifying document {request.document_id}")
+        
+        # Get document chunks
+        chunks = vector_store_manager.get_all_chunks(request.document_id)
+        if not chunks:
+            raise HTTPException(status_code=404, detail="Document not found or has no content")
+        
+        # Simplify using LLM
+        simplified_text = await llm_service.simplify_document(chunks)
+        
+        return {
+            "simplified_text": simplified_text,
+            "document_id": request.document_id,
+            "chunks_processed": len(chunks)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error simplifying document {request.document_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Simplification failed: {str(e)}")
+
+# Risk assessment endpoint
+@app.post("/assess-risk", tags=["Analysis"])
+async def assess_risk_endpoint(request: RiskAssessmentRequest):
+    """Assess legal risks in a document"""
+    try:
+        logger.info(f"Assessing risks for document {request.document_id}")
+        
+        # Get document chunks
+        chunks = vector_store_manager.get_all_chunks(request.document_id)
+        if not chunks:
+            raise HTTPException(status_code=404, detail="Document not found or has no content")
+        
+        # Assess risks using LLM
+        risk_assessment = await llm_service.assess_risks(chunks)
+        
+        return {
+            "risk_assessment": risk_assessment,
+            "document_id": request.document_id,
+            "chunks_processed": len(chunks)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error assessing risks for document {request.document_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Risk assessment failed: {str(e)}")
+
+# Chat with document endpoint
+@app.post("/chat", tags=["Interaction"])
+async def chat_with_document_endpoint(request: ChatRequest):
+    """Chat with a document using AI with language-aware voice support"""
+    try:
+        logger.info(f"Chat request for document {request.document_id}: {request.question[:50]}...")
+        
+        # Get vector store
+        vector_store = vector_store_manager.get_vector_store(request.document_id)
+        if not vector_store:
+            raise HTTPException(status_code=404, detail="Document vector store not found.")
+
+        # Get document language if use_document_language is True
+        document_language = request.language
+        if request.use_document_language:
+            try:
+                # Try to get language from vector store metadata
+                collection_info = vector_store_manager.get_collection_info(request.document_id)
+                stored_language = collection_info.get("metadata", {}).get("language")
+                if stored_language:
+                    document_language = stored_language
+                    logger.info(f"Using document language: {document_language}")
+            except Exception as e:
+                logger.warning(f"Could not retrieve document language: {e}")
+
+        # Get answer from LLM
+        answer, sources = await llm_service.chat_with_document(
+            document_vector_store=vector_store,
+            question=request.question,
+            language=document_language
+        )
+        
+        return {
+            "answer": answer,
+            "sources": sources,
+            "question": request.question,
+            "language": document_language,
+            "document_id": request.document_id,
+            "voice_support": {
+                "can_speak_response": voice_service.is_language_supported(document_language, "tts"),
+                "can_transcribe_input": voice_service.is_language_supported(document_language, "stt")
+            }
+        }
+        
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
+    except Exception as e:
+        logger.error(f"Error in chat for document {request.document_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
+
+# Translation endpoint
+@app.post("/translate", tags=["Language"])
+async def translate_text_endpoint(request: TranslationRequest):
+    """Translate text to target language"""
+    try:
+        logger.info(f"Translating {len(request.text)} characters to {request.target_language}")
+        
+        translated_text = await llm_service.translate_text(request.text, request.target_language)
+        
+        return {
+            "translated_text": translated_text,
+            "target_language": request.target_language,
+            "original_length": len(request.text),
+            "translated_length": len(translated_text)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error translating text: {e}")
+        raise HTTPException(status_code=500, detail=f"Translation failed: {str(e)}")
+
+# Voice transcription endpoint
 @app.post("/voice/transcribe", tags=["Voice"])
 async def transcribe_audio(
     audio_file: UploadFile = File(...),
     language: str = "en"
 ):
-    """Convert speech to text using OpenAI Whisper with Indian language support"""
+    """Convert speech to text using ElevenLabs STT with Indian language support"""
     try:
         if not voice_service.is_stt_available():
             raise HTTPException(
                 status_code=503,
-                detail="Speech-to-text service unavailable. Please check OpenAI API key."
+                detail="Speech-to-text service unavailable. Please check ElevenLabs API key."
             )
         
         # Check language support
@@ -105,14 +414,14 @@ async def transcribe_audio(
                 detail=f"Speech-to-text not supported for language: {language}"
             )
         
-        # Validate file size (25MB limit for Whisper)
+        # Validate file size (3GB limit for ElevenLabs)
         file_content = await audio_file.read()
         file_size_mb = len(file_content) / (1024 * 1024)
         
-        if file_size_mb > 25:
+        if file_size_mb > 3000:  # 3GB limit
             raise HTTPException(
                 status_code=400,
-                detail=f"Audio file too large ({file_size_mb:.1f}MB). Maximum size is 25MB."
+                detail=f"Audio file too large ({file_size_mb:.1f}MB). Maximum size is 3GB."
             )
         
         logger.info(f"Transcribing audio in {language}: {audio_file.filename} ({file_size_mb:.1f}MB)")
@@ -121,7 +430,7 @@ async def transcribe_audio(
         audio_format = "webm"
         if audio_file.filename:
             ext = audio_file.filename.split('.')[-1].lower()
-            if ext in ['mp3', 'wav', 'm4a', 'ogg']:
+            if ext in ['mp3', 'wav', 'm4a', 'ogg', 'aac', 'flac', 'mp4']:
                 audio_format = ext
         
         # Transcribe audio
@@ -144,7 +453,7 @@ async def transcribe_audio(
         logger.error(f"Error in audio transcription: {e}")
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
 
-# Update TTS endpoint
+# Text-to-speech endpoint
 @app.post("/voice/speak", tags=["Voice"])
 async def text_to_speech(request: TTSRequest):
     """Convert text to speech using ElevenLabs with Indian language support"""
@@ -199,9 +508,29 @@ async def text_to_speech(request: TTSRequest):
         logger.error(f"Error in TTS: {e}")
         raise HTTPException(status_code=500, detail=f"TTS failed: {str(e)}")
 
-# Add endpoint to get supported Indian languages
+# Get voice service info
+@app.get("/voice/info", tags=["Voice"])
+async def get_voice_service_info():
+    """Get voice service information with Indian language support"""
+    try:
+        return voice_service.get_service_info()
+    except Exception as e:
+        logger.error(f"Error getting voice service info: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Get available voices
+@app.get("/voice/voices", tags=["Voice"])
+async def get_available_voices():
+    """Get available TTS voices"""
+    try:
+        return await voice_service.get_available_voices()
+    except Exception as e:
+        logger.error(f"Error getting available voices: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Get supported Indian languages
 @app.get("/voice/languages", tags=["Voice"])
-async def get_supported_languages():
+async def get_voice_supported_languages():
     """Get supported Indian languages for voice services"""
     try:
         languages = voice_service.get_supported_languages()
@@ -209,90 +538,74 @@ async def get_supported_languages():
             "supported_languages": languages,
             "tts_languages": [
                 code for code, info in languages.items() 
-                if info.get("elevenlabs_supported", False)
+                if info.get("tts_supported", False)
             ],
             "stt_languages": [
                 code for code, info in languages.items() 
-                if info.get("whisper_code")
+                if info.get("stt_supported", False)
             ]
         }
     except Exception as e:
         logger.error(f"Error getting supported languages: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Update chat endpoint to handle document language
-@app.post("/chat", tags=["Interaction"])
-async def chat_with_document_endpoint(request: ChatRequest):
-    """Chat with a document using AI with language-aware voice support"""
+# Get supported languages
+@app.get("/supported-languages", tags=["Language"])
+async def get_supported_languages():
+    """Get supported languages for the application"""
     try:
-        logger.info(f"Chat request for document {request.document_id}: {request.question[:50]}...")
-        
-        # Get vector store
-        vector_store = vector_store_manager.get_vector_store(request.document_id)
-        if not vector_store:
-            raise HTTPException(status_code=404, detail="Document vector store not found.")
-
-        # Get document language if use_document_language is True
-        document_language = request.language
-        if request.use_document_language:
-            try:
-                # Try to get language from vector store metadata
-                collection_info = vector_store_manager.get_collection_info(request.document_id)
-                stored_language = collection_info.get("metadata", {}).get("language")
-                if stored_language:
-                    document_language = stored_language
-                    logger.info(f"Using document language: {document_language}")
-            except Exception as e:
-                logger.warning(f"Could not retrieve document language: {e}")
-
-        # Get answer from LLM
-        answer, sources = await llm_service.chat_with_document(
-            document_vector_store=vector_store,
-            question=request.question,
-            language=document_language
-        )
-        
         return {
-            "answer": answer,
-            "sources": sources,
-            "question": request.question,
-            "language": document_language,
-            "document_id": request.document_id,
-            "voice_support": {
-                "can_speak_response": voice_service.is_language_supported(document_language, "tts"),
-                "can_transcribe_input": voice_service.is_language_supported(document_language, "stt")
-            }
+            "en": "English",
+            "hi": "Hindi", 
+            "bn": "Bengali",
+            "te": "Telugu",
+            "mr": "Marathi",
+            "ta": "Tamil",
+            "gu": "Gujarati",
+            "kn": "Kannada",
+            "ml": "Malayalam",
+            "pa": "Punjabi",
+            "or": "Odia",
+            "as": "Assamese",
+            "ur": "Urdu"
         }
-        
-    except HTTPException:
-        raise  # Re-raise HTTP exceptions
     except Exception as e:
-        logger.error(f"Error in chat for document {request.document_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
-
-# Get document language info
-@app.get("/documents/{document_id}/language", tags=["Document"])
-async def get_document_language(document_id: str):
-    """Get language information for a specific document"""
-    try:
-        collection_info = vector_store_manager.get_collection_info(document_id)
-        if not collection_info:
-            raise HTTPException(status_code=404, detail="Document not found")
-        
-        language = collection_info.get("metadata", {}).get("language", "en")
-        
-        return {
-            "document_id": document_id,
-            "language": language,
-            "language_name": voice_service.get_supported_languages().get(language, {}).get("name", "Unknown"),
-            "voice_support": {
-                "stt_supported": voice_service.is_language_supported(language, "stt"),
-                "tts_supported": voice_service.is_language_supported(language, "tts")
-            }
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting document language: {e}")
+        logger.error(f"Error getting supported languages: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# Get legal knowledge base info
+@app.get("/legal-kb-info", tags=["System"])
+async def get_legal_kb_info():
+    """Get legal knowledge base information"""
+    try:
+        return {
+            "legal_kb_info": llm_service.get_legal_kb_info(),
+            "document_count": llm_service.get_legal_kb_info().get("count", 0),
+            "datasets_path": llm_service.legal_datasets_path if hasattr(llm_service, 'legal_datasets_path') else None
+        }
+    except Exception as e:
+        logger.error(f"Error getting legal KB info: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Root endpoint
+@app.get("/", tags=["System"])
+async def root():
+    """Root endpoint with API information"""
+    return {
+        "message": "ClauseWise Legal Document AI Assistant API",
+        "version": "1.0.0",
+        "features": [
+            "PDF document processing",
+            "Legal document simplification", 
+            "Risk assessment",
+            "Multi-language chat",
+            "Voice input/output with ElevenLabs",
+            "13+ Indian languages support"
+        ],
+        "docs": "/docs",
+        "health": "/health"
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -3,12 +3,23 @@ import base64
 import logging
 import tempfile
 import asyncio
-from typing import Optional, Dict, Any
-from dotenv import load_dotenv
-from elevenlabs import ElevenLabs
-import openai
-from pydub import AudioSegment
 import io
+from typing import Optional, Dict, Any, List
+from dotenv import load_dotenv
+
+# ElevenLabs for both TTS and STT
+try:
+    from elevenlabs import ElevenLabs
+    ELEVENLABS_AVAILABLE = True
+except ImportError:
+    ELEVENLABS_AVAILABLE = False
+
+# Audio processing
+try:
+    from pydub import AudioSegment
+    AUDIO_PROCESSING_AVAILABLE = True
+except ImportError:
+    AUDIO_PROCESSING_AVAILABLE = False
 
 load_dotenv()
 
@@ -16,40 +27,114 @@ logger = logging.getLogger(__name__)
 
 class VoiceService:
     def __init__(self):
-        """Initialize both TTS and STT services with Indian language support"""
-        # TTS Configuration (ElevenLabs)
+        """Initialize voice service with ElevenLabs for both TTS and STT"""
+        
+        # ElevenLabs Configuration
         self.elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY")
-        self.tts_client = None
-        if self.elevenlabs_api_key:
+        self.client = None
+        
+        if self.elevenlabs_api_key and ELEVENLABS_AVAILABLE:
             try:
-                self.tts_client = ElevenLabs(api_key=self.elevenlabs_api_key)
-                logger.info("✅ ElevenLabs TTS service initialized")
+                self.client = ElevenLabs(api_key=self.elevenlabs_api_key)
+                logger.info("✅ ElevenLabs TTS + STT service initialized")
             except Exception as e:
                 logger.error(f"❌ Failed to initialize ElevenLabs: {e}")
-        
-        # STT Configuration (OpenAI Whisper)
-        self.openai_api_key = os.getenv("OPENAI_API_KEY")
-        if self.openai_api_key:
-            openai.api_key = self.openai_api_key
-            logger.info("✅ OpenAI Whisper STT service initialized")
         else:
-            logger.warning("OPENAI_API_KEY not found. STT functionality will be limited.")
+            logger.warning("ElevenLabs API key not found or package not installed")
         
-        # Indian Language Support
+        # Indian Language Support (based on ElevenLabs Scribe v1 documentation)
         self.indian_language_support = {
-            "hi": {"name": "Hindi", "whisper_code": "hi", "elevenlabs_supported": True},
-            "bn": {"name": "Bengali", "whisper_code": "bn", "elevenlabs_supported": True},
-            "te": {"name": "Telugu", "whisper_code": "te", "elevenlabs_supported": True},
-            "ta": {"name": "Tamil", "whisper_code": "ta", "elevenlabs_supported": True},
-            "mr": {"name": "Marathi", "whisper_code": "mr", "elevenlabs_supported": True},
-            "gu": {"name": "Gujarati", "whisper_code": "gu", "elevenlabs_supported": True},
-            "kn": {"name": "Kannada", "whisper_code": "kn", "elevenlabs_supported": True},
-            "ml": {"name": "Malayalam", "whisper_code": "ml", "elevenlabs_supported": True},
-            "pa": {"name": "Punjabi", "whisper_code": "pa", "elevenlabs_supported": True},
-            "or": {"name": "Odia", "whisper_code": "or", "elevenlabs_supported": True},
-            "as": {"name": "Assamese", "whisper_code": "as", "elevenlabs_supported": False},
-            "ur": {"name": "Urdu", "whisper_code": "ur", "elevenlabs_supported": True},
-            "en": {"name": "English", "whisper_code": "en", "elevenlabs_supported": True}
+            "hi": {
+                "name": "Hindi",
+                "elevenlabs_code": "hin",  # ElevenLabs language code
+                "tts_supported": True,
+                "stt_supported": True,
+                "accuracy": "excellent"  # ≤ 5% WER
+            },
+            "bn": {
+                "name": "Bengali", 
+                "elevenlabs_code": "ben",
+                "tts_supported": True,
+                "stt_supported": True,
+                "accuracy": "high"  # >5% to ≤10% WER
+            },
+            "te": {
+                "name": "Telugu",
+                "elevenlabs_code": "tel",
+                "tts_supported": True,
+                "stt_supported": True,
+                "accuracy": "high"
+            },
+            "ta": {
+                "name": "Tamil",
+                "elevenlabs_code": "tam",
+                "tts_supported": True,
+                "stt_supported": True,
+                "accuracy": "high"
+            },
+            "mr": {
+                "name": "Marathi",
+                "elevenlabs_code": "mar",
+                "tts_supported": True,
+                "stt_supported": True,
+                "accuracy": "high"
+            },
+            "gu": {
+                "name": "Gujarati",
+                "elevenlabs_code": "guj",
+                "tts_supported": True,
+                "stt_supported": True,
+                "accuracy": "good"  # >10% to ≤25% WER
+            },
+            "kn": {
+                "name": "Kannada",
+                "elevenlabs_code": "kan",
+                "tts_supported": True,
+                "stt_supported": True,
+                "accuracy": "excellent"
+            },
+            "ml": {
+                "name": "Malayalam",
+                "elevenlabs_code": "mal",
+                "tts_supported": True,
+                "stt_supported": True,
+                "accuracy": "excellent"
+            },
+            "pa": {
+                "name": "Punjabi",
+                "elevenlabs_code": "pan",
+                "tts_supported": True,
+                "stt_supported": True,
+                "accuracy": "good"
+            },
+            "or": {
+                "name": "Odia",
+                "elevenlabs_code": "ori",
+                "tts_supported": True,
+                "stt_supported": True,
+                "accuracy": "high"
+            },
+            "as": {
+                "name": "Assamese",
+                "elevenlabs_code": "asm",
+                "tts_supported": True,
+                "stt_supported": True,
+                "accuracy": "good"
+            },
+            "ur": {
+                "name": "Urdu",
+                "elevenlabs_code": "urd",
+                "tts_supported": True,
+                "stt_supported": True,
+                "accuracy": "good"
+            },
+            "en": {
+                "name": "English",
+                "elevenlabs_code": "eng",
+                "tts_supported": True,
+                "stt_supported": True,
+                "accuracy": "excellent"
+            }
         }
         
         # Default settings
@@ -63,11 +148,11 @@ class VoiceService:
     
     def is_tts_available(self) -> bool:
         """Check if TTS service is available"""
-        return self.tts_client is not None
+        return self.client is not None
     
     def is_stt_available(self) -> bool:
         """Check if STT service is available"""
-        return bool(self.openai_api_key)
+        return self.client is not None
     
     def get_supported_languages(self) -> Dict[str, Any]:
         """Get supported languages for both STT and TTS"""
@@ -81,11 +166,11 @@ class VoiceService:
         lang_info = self.indian_language_support[language_code]
         
         if service == "stt":
-            return bool(lang_info.get("whisper_code"))
+            return lang_info.get("stt_supported", False)
         elif service == "tts":
-            return lang_info.get("elevenlabs_supported", False)
+            return lang_info.get("tts_supported", False)
         else:  # both
-            return bool(lang_info.get("whisper_code")) and lang_info.get("elevenlabs_supported", False)
+            return lang_info.get("stt_supported", False) and lang_info.get("tts_supported", False)
     
     async def speech_to_text(
         self, 
@@ -94,7 +179,7 @@ class VoiceService:
         language: str = "en"
     ) -> Optional[str]:
         """
-        Convert speech to text using OpenAI Whisper with language support
+        Convert speech to text using ElevenLabs STT (Scribe v1)
         
         Args:
             audio_data: Raw audio bytes
@@ -117,7 +202,8 @@ class VoiceService:
             logger.warning(f"Language {language} not supported, defaulting to English")
             language = "en"
         
-        whisper_language = self.indian_language_support[language]["whisper_code"]
+        # Get ElevenLabs language code
+        elevenlabs_lang_code = self.indian_language_support[language]["elevenlabs_code"]
         
         temp_audio_path = None
         try:
@@ -126,31 +212,40 @@ class VoiceService:
                 temp_file.write(audio_data)
                 temp_audio_path = temp_file.name
             
-            # Convert to WAV if needed (Whisper prefers WAV/MP3)
-            if audio_format.lower() in ['webm', 'ogg']:
+            # Convert to supported format if needed
+            if audio_format.lower() in ['webm', 'ogg'] and AUDIO_PROCESSING_AVAILABLE:
                 try:
                     audio = AudioSegment.from_file(temp_audio_path, format=audio_format)
                     wav_path = temp_audio_path.replace(f".{audio_format}", ".wav")
                     audio.export(wav_path, format="wav")
                     temp_audio_path = wav_path
+                    audio_format = "wav"
                 except Exception as e:
                     logger.warning(f"Audio conversion failed, using original: {e}")
             
-            logger.info(f"Transcribing audio in {language} ({whisper_language})")
+            logger.info(f"Transcribing audio in {language} ({elevenlabs_lang_code}) using ElevenLabs Scribe v1")
             
-            # Transcribe with OpenAI Whisper
+            # ElevenLabs STT API call
             with open(temp_audio_path, "rb") as audio_file:
+                # Using the correct ElevenLabs STT API method
                 response = await asyncio.to_thread(
-                    openai.audio.transcriptions.create,
-                    model="whisper-1",
-                    file=audio_file,
-                    language=whisper_language
+                    self.client.speech_to_text.transcribe,
+                    audio_file,
+                    model_id="scribe-v1"  # Scribe v1 model
                 )
             
-            transcribed_text = response.text.strip()
-            logger.info(f"✅ Successfully transcribed: {len(transcribed_text)} characters in {language}")
-            return transcribed_text
+            # Extract transcribed text from response
+            if hasattr(response, 'text'):
+                transcribed_text = response.text
+            elif isinstance(response, dict) and 'text' in response:
+                transcribed_text = response['text']
+            else:
+                logger.error("Unexpected response format from ElevenLabs STT")
+                return None
             
+            logger.info(f"✅ Successfully transcribed: {len(transcribed_text)} characters in {language}")
+            return transcribed_text.strip()
+                
         except Exception as e:
             logger.error(f"❌ Error in speech-to-text for {language}: {e}")
             return None
@@ -160,10 +255,11 @@ class VoiceService:
             if temp_audio_path and os.path.exists(temp_audio_path):
                 try:
                     os.remove(temp_audio_path)
-                    # Also remove converted WAV if it exists
-                    wav_path = temp_audio_path.replace(".webm", ".wav").replace(".ogg", ".wav")
-                    if wav_path != temp_audio_path and os.path.exists(wav_path):
-                        os.remove(wav_path)
+                    # Also remove converted files
+                    for ext in ['.wav', '.mp3']:
+                        converted_path = temp_audio_path.replace(f".{audio_format}", ext)
+                        if converted_path != temp_audio_path and os.path.exists(converted_path):
+                            os.remove(converted_path)
                 except Exception as e:
                     logger.warning(f"Could not remove temp audio file: {e}")
     
@@ -175,7 +271,7 @@ class VoiceService:
         language: str = "en"
     ) -> Optional[str]:
         """
-        Convert text to speech using ElevenLabs with Indian language support
+        Convert text to speech using ElevenLabs TTS
         
         Args:
             text: Text to convert to speech
@@ -200,9 +296,10 @@ class VoiceService:
             language = "en"
         
         # Limit text length
-        if len(text) > 5000:
+        max_length = int(os.getenv("TTS_MAX_CHARACTERS", "5000"))
+        if len(text) > max_length:
             logger.warning(f"Text too long for TTS ({len(text)} chars), truncating")
-            text = text[:4500] + "..."
+            text = text[:max_length-3] + "..."
         
         try:
             voice_id = voice_id or self.default_voice_id
@@ -214,7 +311,7 @@ class VoiceService:
             model = "eleven_multilingual_v2" if language != "en" else "eleven_monolingual_v1"
             
             # Generate speech
-            audio_generator = self.tts_client.generate(
+            audio_generator = self.client.generate(
                 text=text,
                 voice=voice_id,
                 voice_settings=settings,
@@ -240,7 +337,7 @@ class VoiceService:
             return {"error": "TTS service not available", "voices": []}
         
         try:
-            voices = self.tts_client.voices.get_all()
+            voices = self.client.voices.get_all()
             
             voice_list = []
             for voice in voices.voices:
@@ -251,7 +348,7 @@ class VoiceService:
                     "category": getattr(voice, 'category', ''),
                     "labels": getattr(voice, 'labels', {}),
                     "preview_url": getattr(voice, 'preview_url', ''),
-                    "supports_multilingual": True  # ElevenLabs multilingual model supports most voices
+                    "supports_multilingual": True
                 }
                 voice_list.append(voice_info)
             
@@ -267,42 +364,41 @@ class VoiceService:
             return {"error": str(e), "voices": []}
     
     def get_service_info(self) -> Dict[str, Any]:
-        """Get voice service information with Indian language support"""
+        """Get voice service information"""
         return {
             "tts": {
                 "service": "ElevenLabs",
                 "available": self.is_tts_available(),
                 "default_voice_id": self.default_voice_id if self.is_tts_available() else None,
-                "max_text_length": 5000,
+                "max_text_length": int(os.getenv("TTS_MAX_CHARACTERS", "5000")),
                 "supported_formats": ["mp3"],
                 "supported_languages": [
                     {
                         "code": code,
                         "name": info["name"],
-                        "supported": info["elevenlabs_supported"]
+                        "supported": info["tts_supported"]
                     }
                     for code, info in self.indian_language_support.items()
-                    if info["elevenlabs_supported"]
                 ]
             },
             "stt": {
-                "service": "OpenAI Whisper",
+                "service": "ElevenLabs Scribe v1",
                 "available": self.is_stt_available(),
-                "supported_formats": ["webm", "mp3", "wav", "m4a", "ogg"],
-                "max_file_size_mb": 25,
+                "supported_formats": ["webm", "mp3", "wav", "m4a", "ogg", "aac", "flac", "mp4"],
+                "max_file_size_mb": int(os.getenv("STT_MAX_FILE_SIZE_MB", "3000")),  # 3GB limit
+                "max_duration_hours": int(os.getenv("STT_MAX_DURATION_HOURS", "10")),
                 "supported_languages": [
                     {
                         "code": code,
                         "name": info["name"],
-                        "whisper_code": info["whisper_code"]
+                        "elevenlabs_code": info["elevenlabs_code"],
+                        "accuracy": info["accuracy"]
                     }
                     for code, info in self.indian_language_support.items()
-                    if info["whisper_code"]
                 ]
             },
             "api_keys": {
-                "elevenlabs_configured": bool(self.elevenlabs_api_key),
-                "openai_configured": bool(self.openai_api_key)
+                "elevenlabs_configured": bool(self.elevenlabs_api_key)
             },
             "indian_languages": self.indian_language_support
         }
