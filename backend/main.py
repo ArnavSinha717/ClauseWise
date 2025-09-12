@@ -1,11 +1,16 @@
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env (from project root)
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
+load_dotenv()  # fallback to root if needed
 from fastapi import FastAPI, HTTPException, File, UploadFile, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import logging
-import os
-from dotenv import load_dotenv
+
 
 # Load environment variables
 load_dotenv()
@@ -36,7 +41,9 @@ app.add_middleware(
         "http://127.0.0.1:3000", 
         "http://127.0.0.1:8501",
         "http://localhost:5173",  # Vite dev server
-        "http://127.0.0.1:5173"   # Vite dev server
+        "http://127.0.0.1:5173",   # Vite dev server
+        "http://127.0.0.1:5174",
+        "http://localhost:5174"
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
